@@ -27,27 +27,41 @@ async function getOverdueRows(limit: number, companyId: string): Promise<Outstan
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
 
-  const query = new URL(`${url}/rest/v1/outstanding`);
-  query.searchParams.set("select", "company_id,customer_name,mobile_number,invoicenumber,date,duedate,overdue_days,amount,closing_balance");
-  query.searchParams.set("company_id", `eq.${companyId}`);
-  query.searchParams.set("bill_type", "eq.receivable");
-  query.searchParams.set("order", "customer_name.asc,duedate.asc");
-  query.searchParams.set("limit", String(limit));
+  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+  const baseFields = "company_id,customer_name,invoicenumber,date,duedate,overdue_days,amount,closing_balance";
+  const attempts = [
+    `${baseFields},mobile_number`,
+    `${baseFields},customer_number`,
+  ];
 
-  const res = await fetch(query.toString(), {
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-    },
-    cache: "no-store",
-  });
+  for (const selectFields of attempts) {
+    const query = new URL(`${url}/rest/v1/outstanding`);
+    query.searchParams.set("select", selectFields);
+    query.searchParams.set("company_id", `eq.${companyId}`);
+    query.searchParams.set("bill_type", "eq.receivable");
+    query.searchParams.set("order", "customer_name.asc,duedate.asc");
+    query.searchParams.set("limit", String(limit));
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Supabase fetch failed: ${res.status} ${txt.slice(0, 300)}`);
+    const res = await fetch(query.toString(), { headers, cache: "no-store" });
+    if (!res.ok) {
+      continue;
+    }
+    const rawRows = (await res.json()) as Array<Record<string, string | number | null>>;
+    return rawRows.map((r) => ({
+      company_id: (r.company_id as string | null) ?? null,
+      customer_name: String(r.customer_name || ""),
+      mobile_number: (r.mobile_number ?? r.customer_number ?? null) as string | number | null,
+      invoicenumber: String(r.invoicenumber || ""),
+      date: String(r.date || ""),
+      duedate: (r.duedate as string | null) ?? null,
+      overdue_days: (r.overdue_days as number | null) ?? null,
+      amount: String(r.amount ?? "0"),
+      closing_balance: String(r.closing_balance ?? "0"),
+      voucher_type: null,
+    }));
   }
-  const rows = (await res.json()) as Array<Omit<Outstanding, "voucher_type">>;
-  return rows.map((r) => ({ ...r, voucher_type: null }));
+
+  return [];
 }
 
 export default async function OverduePage({ searchParams }: { searchParams: { limit?: string; access?: string; token?: string } }) {
