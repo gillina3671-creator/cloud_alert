@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
     const ownerPhoneRaw =
       String(company?.owner_number || "") ||
       String(company?.owner_phone_number || "") ||
+      accessToken ||
       process.env.INTERAKT_OWNER_PHONE ||
       "";
     const ownerTemplateName = process.env.INTERAKT_OWNER_CONFIRMATION_TEMPLATE_NAME || "reminder_confirmation";
@@ -148,31 +149,45 @@ export async function POST(req: NextRequest) {
     const ownerPhone = digits(ownerPhoneRaw);
 
     if (sent > 0 && ownerPhone) {
-      const ownerPayload = {
-        countryCode,
-        phoneNumber: ownerPhone,
-        type: "Template",
-        template: {
-          name: ownerTemplateName,
-          languageCode: "en",
-          bodyValues: [String(sent)],
-        },
+      const sendOwner = async (bodyValues?: string[]) => {
+        const ownerPayload = {
+          countryCode,
+          phoneNumber: ownerPhone,
+          type: "Template",
+          template: {
+            name: ownerTemplateName,
+            languageCode: "en",
+            ...(bodyValues ? { bodyValues } : {}),
+          },
+        };
+        const ownerRes = await fetch(`${interaktBase.replace(/\/$/, "")}/v1/public/message/`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${interaktKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(ownerPayload),
+        });
+        let ownerBody: unknown = null;
+        try {
+          ownerBody = await ownerRes.json();
+        } catch {
+          ownerBody = await ownerRes.text();
+        }
+        return { ownerRes, ownerBody };
       };
 
-      const ownerRes = await fetch(`${interaktBase.replace(/\/$/, "")}/v1/public/message/`, {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${interaktKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(ownerPayload),
-      });
-
-      try {
-        owner_confirmation_response = await ownerRes.json();
-      } catch {
-        owner_confirmation_response = await ownerRes.text();
+      let { ownerRes, ownerBody } = await sendOwner([String(sent)]);
+      if (!ownerRes.ok) {
+        const txt = typeof ownerBody === "string" ? ownerBody : JSON.stringify(ownerBody);
+        if (txt.includes("expected number of params") || txt.includes("bodyValues")) {
+          const retry = await sendOwner();
+          ownerRes = retry.ownerRes;
+          ownerBody = retry.ownerBody;
+        }
       }
+
+      owner_confirmation_response = ownerBody;
       owner_confirmation_sent = ownerRes.ok;
     }
 
