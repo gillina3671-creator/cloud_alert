@@ -3,6 +3,7 @@ import { resolveCompanyIdByAccessToken, resolveSingleCompanyId } from "../../../
 
 type ReminderRow = {
   company_id: string | null;
+  company_name?: string | null;
   customer_name: string;
   mobile_number: string | number | null;
   invoicenumber: string;
@@ -22,13 +23,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const rows = ((body?.rows || []) as ReminderRow[]).filter((row) => row.company_id === companyId);
+    const inputRows = (body?.rows || []) as ReminderRow[];
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      return NextResponse.json({ error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
+    }
+
+    // Resolve company owner from DB so multi-company owner confirmation goes to correct number.
+    const companyQuery = new URL(`${supabaseUrl}/rest/v1/tally_companies`);
+    companyQuery.searchParams.set("select", "id,Guid,company_name,owner_number,owner_phone_number");
+    companyQuery.searchParams.set("id", `eq.${companyId}`);
+    companyQuery.searchParams.set("limit", "1");
+    const companyRes = await fetch(companyQuery.toString(), {
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
+      cache: "no-store",
+    });
+    const companyRows = companyRes.ok ? ((await companyRes.json()) as Array<{ Guid?: string; company_name?: string; owner_number?: string | number | null; owner_phone_number?: string | number | null }>) : [];
+    const company = companyRows[0];
+    const companyGuid = String(company?.Guid || "");
+    const companyName = String(company?.company_name || "").trim().toLowerCase();
+
+    // Keep strict tenant safety, but allow either id-guid/company-name style row mapping.
+    const rows = inputRows.filter((row) => {
+      if (row.company_id && row.company_id === companyId) return true; // id-based
+      if (row.company_id && companyGuid && row.company_id === companyGuid) return true; // guid-based
+      if (!row.company_id && row.company_name && companyName && String(row.company_name).trim().toLowerCase() === companyName) return true;
+      return false;
+    });
 
     const interaktKey = process.env.INTERAKT_API_KEY;
     const interaktBase = process.env.INTERAKT_BASE_URL || "https://api.interakt.ai";
     const countryCode = process.env.INTERAKT_COUNTRY_CODE || "+91";
     const templateName = process.env.INTERAKT_CUSTOMER_TEMPLATE_NAME || "customer_payment_remind";
-    const ownerPhoneRaw = process.env.INTERAKT_OWNER_PHONE || "";
+    const ownerPhoneRaw =
+      String(company?.owner_number || "") ||
+      String(company?.owner_phone_number || "") ||
+      process.env.INTERAKT_OWNER_PHONE ||
+      "";
     const ownerTemplateName = process.env.INTERAKT_OWNER_CONFIRMATION_TEMPLATE_NAME || "reminder_confirmation";
 
     if (!interaktKey) {
