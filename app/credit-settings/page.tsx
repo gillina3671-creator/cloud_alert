@@ -41,9 +41,13 @@ async function getCustomers(companyId: string): Promise<Customer[]> {
 
   let customersRes = await fetch(customersQuery.toString(), { headers, cache: "no-store" });
   let outstandingRes = await fetch(outstandingQuery.toString(), { headers, cache: "no-store" });
+  let customersRowsById: Array<Omit<Customer, "outstanding_total">> = [];
+  let outstandingRowsById: OutstandingRow[] = [];
+  if (customersRes.ok) customersRowsById = (await customersRes.json()) as Array<Omit<Customer, "outstanding_total">>;
+  if (outstandingRes.ok) outstandingRowsById = (await outstandingRes.json()) as OutstandingRow[];
 
   // Fallback for schemas where company_id does not match Guid.
-  if (!customersRes.ok || !outstandingRes.ok) {
+  if (!customersRes.ok || !outstandingRes.ok || customersRowsById.length === 0) {
     const companyQuery = new URL(`${url}/rest/v1/tally_companies`);
     companyQuery.searchParams.set("select", "company_name");
     companyQuery.searchParams.set("Guid", `eq.${companyId}`);
@@ -86,8 +90,8 @@ async function getCustomers(companyId: string): Promise<Customer[]> {
   if (!customersRes.ok) throw new Error(`Customer fetch failed: ${customersRes.status}`);
   if (!outstandingRes.ok) throw new Error(`Outstanding fetch failed: ${outstandingRes.status}`);
 
-  const customers = (await customersRes.json()) as Array<Omit<Customer, "outstanding_total">>;
-  const outstanding = (await outstandingRes.json()) as OutstandingRow[];
+  const customers = customersRowsById;
+  const outstanding = outstandingRowsById;
   const totals = new Map<string, number>();
   outstanding.forEach((row) => {
     const k = keyOf(row.customer_name || "");
