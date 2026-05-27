@@ -12,7 +12,7 @@ type Outstanding = {
   overdue_days: number | null;
   amount: string;
   closing_balance: string;
-  voucher_type?: string | null;
+  voucher_type: string | null;
 };
 
 function num(v: string | number | null | undefined): string {
