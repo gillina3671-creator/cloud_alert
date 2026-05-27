@@ -282,57 +282,61 @@ export async function runAlertsJob(): Promise<{ companies: number; overdueSent: 
       }
     }
 
-    let products = await sbSelect<ProductRow>("products", {
-      select: "company_id,company_name,ItemName,ItemQuantity,reorder_level,reorder_quantity",
-      company_id: `eq.${companyGuid}`,
-      is_active: "eq.true",
-      limit: "20000",
-    });
-    if (!products.length && companyName) {
-      const allProducts = await sbSelect<ProductRow>("products", {
-        select: "company_id,company_name,ItemName,ItemQuantity,reorder_level,reorder_quantity,is_active",
+    try {
+      let products = await sbSelect<ProductRow>("products", {
+        select: "company_id,company_name,ItemName,ItemQuantity,reorder_level,reorder_quantity",
+        company_id: `eq.${companyGuid}`,
         is_active: "eq.true",
         limit: "20000",
       });
-      products = allProducts.filter((p) => norm(p.company_name) === norm(companyName));
-    }
-    const reorderItems = products.filter((p) => {
-      const level = n(p.reorder_level);
-      const qty = n(p.ItemQuantity);
-      return level > 0 && qty === level;
-    });
-
-    if (reorderTemplate && reorderItems.length > 0) {
-      try {
-        const resp = await sendInteraktTemplate(
-          ownerPhone,
-          reorderTemplate,
-          [String(reorderItems.length)],
-          buildReorderLink(accessToken),
-        );
-        reorderSent += 1;
-        await sbInsert("reorder_alert_logs", [
-          {
-            snapshot_date: today,
-            company_id: companyGuid,
-            owner_phone_number: ownerPhone,
-            item_count: reorderItems.length,
-            status: "sent",
-            response_json: resp,
-          },
-        ]).catch(() => Promise.resolve());
-      } catch (e) {
-        await sbInsert("reorder_alert_logs", [
-          {
-            snapshot_date: today,
-            company_id: companyGuid,
-            owner_phone_number: ownerPhone,
-            item_count: reorderItems.length,
-            status: "failed",
-            response_json: { error: e instanceof Error ? e.message : "Unknown error" },
-          },
-        ]).catch(() => Promise.resolve());
+      if (!products.length && companyName) {
+        const allProducts = await sbSelect<ProductRow>("products", {
+          select: "company_id,company_name,ItemName,ItemQuantity,reorder_level,reorder_quantity,is_active",
+          is_active: "eq.true",
+          limit: "20000",
+        });
+        products = allProducts.filter((p) => norm(p.company_name) === norm(companyName));
       }
+      const reorderItems = products.filter((p) => {
+        const level = n(p.reorder_level);
+        const qty = n(p.ItemQuantity);
+        return level > 0 && qty === level;
+      });
+
+      if (reorderTemplate && reorderItems.length > 0) {
+        try {
+          const resp = await sendInteraktTemplate(
+            ownerPhone,
+            reorderTemplate,
+            [String(reorderItems.length)],
+            buildReorderLink(accessToken),
+          );
+          reorderSent += 1;
+          await sbInsert("reorder_alert_logs", [
+            {
+              snapshot_date: today,
+              company_id: companyGuid,
+              owner_phone_number: ownerPhone,
+              item_count: reorderItems.length,
+              status: "sent",
+              response_json: resp,
+            },
+          ]).catch(() => Promise.resolve());
+        } catch (e) {
+          await sbInsert("reorder_alert_logs", [
+            {
+              snapshot_date: today,
+              company_id: companyGuid,
+              owner_phone_number: ownerPhone,
+              item_count: reorderItems.length,
+              status: "failed",
+              response_json: { error: e instanceof Error ? e.message : "Unknown error" },
+            },
+          ]).catch(() => Promise.resolve());
+        }
+      }
+    } catch {
+      // Keep overdue/credit pipeline alive even when products schema/table differs.
     }
   }
 
