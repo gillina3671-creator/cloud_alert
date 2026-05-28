@@ -18,6 +18,9 @@ export default function Home() {
           <Link href="/reorder">Open Reorder Alerts</Link>
         </p>
         <p>
+          <Link href="/daybook">Open Daybook</Link>
+        </p>
+        <p>
           Open using a company link: <code>/overdue?access=COMPANY_TOKEN</code>
         </p>
         <p>
@@ -25,6 +28,9 @@ export default function Home() {
         </p>
         <p>
           Reorder link: <code>/reorder?access=COMPANY_TOKEN</code>
+        </p>
+        <p>
+          Daybook link: <code>/daybook?access=COMPANY_TOKEN</code>
         </p>
       </div>
     </main>

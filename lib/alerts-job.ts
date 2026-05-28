@@ -1,4 +1,7 @@
+import { businessDate, getDaybookRows, numberValue } from "./daybook";
+
 type CompanyRow = {
+  id: string;
   Guid: string;
   company_name: string | null;
   owner_number: string | number | null;
@@ -142,24 +145,33 @@ function buildReorderLink(accessToken: string): string | undefined {
   return b.endsWith("/reorder") ? `${b}?access=${accessToken}` : `${b}/reorder?access=${accessToken}`;
 }
 
-export async function runAlertsJob(): Promise<{ companies: number; overdueSent: number; creditSent: number; reorderSent: number }> {
+function buildDaybookLink(accessToken: string): string | undefined {
+  const base = (process.env.INTERAKT_DAYBOOK_PORTAL_BASE_URL || process.env.INTERAKT_PORTAL_BASE_URL)?.trim();
+  if (!base) return undefined;
+  const b = base.replace(/\/$/, "");
+  return b.endsWith("/daybook") ? `${b}?access=${accessToken}` : `${b}/daybook?access=${accessToken}`;
+}
+
+export async function runAlertsJob(): Promise<{ companies: number; overdueSent: number; creditSent: number; reorderSent: number; daybookSent: number }> {
   const overdueThreshold = Number(process.env.OVERDUE_CUSTOMERS_THRESHOLD || "1");
   const overdueDaysThreshold = Number(process.env.OVERDUE_DAYS_THRESHOLD || "1");
   const creditThresholdPercent = Number(process.env.DEFAULT_CREDIT_THRESHOLD_PERCENT || "90");
   const overdueTemplate = process.env.INTERAKT_TEMPLATE_NAME || "";
   const creditTemplate = process.env.INTERAKT_CREDIT_ALERT_TEMPLATE_NAME || "";
   const reorderTemplate = process.env.INTERAKT_REORDER_ALERT_TEMPLATE_NAME || "";
+  const daybookTemplate = process.env.INTERAKT_DAYBOOK_TEMPLATE_NAME || "";
   const interaktEnabled = String(process.env.INTERAKT_ENABLED || "false").toLowerCase() === "true";
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessDate();
 
   const companies = await sbSelect<CompanyRow>("tally_companies", {
-    select: "Guid,company_name,owner_number,owner_phone_number,access_token,is_active",
+    select: "id,Guid,company_name,owner_number,owner_phone_number,access_token,is_active",
     limit: "10000",
   });
 
   let overdueSent = 0;
   let creditSent = 0;
   let reorderSent = 0;
+  let daybookSent = 0;
 
   for (const company of companies) {
     if (company.is_active === false) continue;
@@ -257,6 +269,64 @@ export async function runAlertsJob(): Promise<{ companies: number; overdueSent: 
     const accessToken = digits(company.access_token) || ownerPhone;
     if (!interaktEnabled || !ownerPhone) continue;
 
+    if (daybookTemplate) {
+      try {
+        const daybookRows = await getDaybookRows(
+          { id: String(company.id || companyGuid), Guid: companyGuid || null, company_name: companyName || null },
+          today,
+        );
+        const daybookAmount = daybookRows.reduce((acc, row) => acc + numberValue(row.net_amount ?? row.amount), 0);
+        const logCompanyId = companyGuid || String(company.id || "");
+        const existingLogs = await sbSelect<{ id?: string }>("daybook_alert_logs", {
+          select: "id",
+          snapshot_date: `eq.${today}`,
+          company_id: `eq.${logCompanyId}`,
+          status: "eq.sent",
+          limit: "1",
+        }).catch(() => []);
+
+        if (daybookRows.length > 0 && existingLogs.length === 0) {
+          const resp = await sendInteraktTemplate(ownerPhone, daybookTemplate, [], buildDaybookLink(accessToken));
+          daybookSent += 1;
+          await sbInsert("daybook_alert_logs", [
+            {
+              snapshot_date: today,
+              company_id: logCompanyId,
+              owner_phone_number: ownerPhone,
+              transaction_count: daybookRows.length,
+              total_amount: String(daybookAmount),
+              status: "sent",
+              response_json: resp,
+            },
+          ]).catch(() => Promise.resolve());
+        } else if (daybookRows.length > 0) {
+          await sbInsert("daybook_alert_logs", [
+            {
+              snapshot_date: today,
+              company_id: logCompanyId,
+              owner_phone_number: ownerPhone,
+              transaction_count: daybookRows.length,
+              total_amount: String(daybookAmount),
+              status: "skipped",
+              response_json: { reason: "already_sent" },
+            },
+          ]).catch(() => Promise.resolve());
+        }
+      } catch (e) {
+        await sbInsert("daybook_alert_logs", [
+          {
+            snapshot_date: today,
+            company_id: companyGuid || String(company.id || ""),
+            owner_phone_number: ownerPhone,
+            transaction_count: 0,
+            total_amount: "0",
+            status: "failed",
+            response_json: { error: e instanceof Error ? e.message : "Unknown error" },
+          },
+        ]).catch(() => Promise.resolve());
+      }
+    }
+
     if (triggered && overdueTemplate) {
       try {
         const resp = await sendInteraktTemplate(ownerPhone, overdueTemplate, [], buildOverdueLink(accessToken));
@@ -347,5 +417,5 @@ export async function runAlertsJob(): Promise<{ companies: number; overdueSent: 
     }
   }
 
-  return { companies: companies.length, overdueSent, creditSent, reorderSent };
+  return { companies: companies.length, overdueSent, creditSent, reorderSent, daybookSent };
 }
