@@ -358,13 +358,16 @@ export async function runAlertsJob(): Promise<{ companies: number; overdueSent: 
 
     try {
       let products: ProductRow[] = [];
-      if (isUuidLike(companyGuid)) {
+      const productCompanyIds = [String(company.id || "").trim(), companyGuid].filter((v, i, arr) => v && arr.indexOf(v) === i);
+      for (const productCompanyId of productCompanyIds) {
+        if (!isUuidLike(productCompanyId)) continue;
         products = await sbSelect<ProductRow>("products", {
           select: "company_id,company_name,ItemName,ItemQuantity,reorder_level,reorder_quantity",
-          company_id: `eq.${companyGuid}`,
+          company_id: `eq.${productCompanyId}`,
           is_active: "eq.true",
           limit: "20000",
         });
+        if (products.length) break;
       }
       if (!products.length && companyName) {
         const allProducts = await sbSelect<ProductRow>("products", {
